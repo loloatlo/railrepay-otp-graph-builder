@@ -25,8 +25,9 @@ echo "Metadata:"
 cat "${GRAPH_DIR}/metadata.json"
 
 # Start OTP in background for validation
-echo "Starting OTP server for validation..."
-java -Xmx4g -jar "${OTP_JAR}" --load "${GRAPH_DIR}" --port "${VALIDATION_PORT}" &
+VALIDATION_HEAP="${JAVA_OPTS:--Xmx16g}"
+echo "Starting OTP server for validation with ${VALIDATION_HEAP}..."
+java ${VALIDATION_HEAP} -jar "${OTP_JAR}" --load "${GRAPH_DIR}" --port "${VALIDATION_PORT}" &
 OTP_PID=$!
 
 # Wait for OTP to be ready
