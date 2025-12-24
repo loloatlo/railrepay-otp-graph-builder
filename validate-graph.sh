@@ -32,7 +32,7 @@ OTP_PID=$!
 
 # Wait for OTP to be ready
 echo "Waiting for OTP to start..."
-MAX_WAIT=120
+MAX_WAIT=600
 WAITED=0
 while ! curl -s "http://localhost:${VALIDATION_PORT}/otp/actuators/health" > /dev/null; do
     sleep 2
