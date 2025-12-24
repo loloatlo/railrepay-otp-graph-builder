@@ -46,8 +46,9 @@ cp "${BUILD_DIR}/gtfs.zip" "${GRAPH_DIR}/"
 cp /opt/config/build-config.json "${GRAPH_DIR}/"
 
 # Build graph
-echo "Building graph (this will take 45-90 minutes)..."
-java -Xmx10g -jar /opt/otp.jar --build --save "${GRAPH_DIR}"
+JAVA_HEAP="${JAVA_OPTS:--Xmx10g}"
+echo "Building graph with ${JAVA_HEAP} (this will take 45-90 minutes)..."
+java ${JAVA_HEAP} -jar /opt/otp.jar --build --save "${GRAPH_DIR}"
 
 # Create metadata
 cat > "${GRAPH_DIR}/metadata.json" << EOF
