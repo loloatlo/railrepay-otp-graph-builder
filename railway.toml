@@ -4,10 +4,9 @@ dockerfilePath = "Dockerfile.builder"
 
 [deploy]
 startCommand = "/opt/build-graph.sh"
-healthcheckPath = ""
-healthcheckTimeout = 300
-restartPolicyType = "never"
-numReplicas = 0
+restartPolicyType = "NEVER"
+numReplicas = 1
 
-# Graph builder is a one-off job, not a service
-# Trigger manually via Railway dashboard or CLI
+# Graph builder is a one-off build job
+# After successful completion, scale replicas to 0 in Railway dashboard
+# Or redeploy to rebuild the graph
