@@ -30,11 +30,21 @@ echo "Starting OTP server for validation with ${VALIDATION_HEAP}..."
 java ${VALIDATION_HEAP} -jar "${OTP_JAR}" --load "${GRAPH_DIR}" --port "${VALIDATION_PORT}" &
 OTP_PID=$!
 
-# Wait for OTP to be ready
+# Wait for OTP to be ready by checking if GraphQL endpoint responds
 echo "Waiting for OTP to start..."
 MAX_WAIT=600
 WAITED=0
-while ! curl -s "http://localhost:${VALIDATION_PORT}/otp/actuators/health" > /dev/null; do
+HEALTH_QUERY='{"query":"{ serverInfo { version } }"}'
+while true; do
+    RESPONSE=$(curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d "$HEALTH_QUERY" \
+        "http://localhost:${VALIDATION_PORT}/otp/routers/default/index/graphql" 2>/dev/null || echo "")
+
+    if echo "$RESPONSE" | grep -q "version"; then
+        break
+    fi
+
     sleep 2
     WAITED=$((WAITED + 2))
     if [ $WAITED -gt $MAX_WAIT ]; then
@@ -42,20 +52,15 @@ while ! curl -s "http://localhost:${VALIDATION_PORT}/otp/actuators/health" > /de
         kill $OTP_PID 2>/dev/null || true
         exit 1
     fi
+
+    # Show progress every 30 seconds
+    if [ $((WAITED % 30)) -eq 0 ]; then
+        echo "Still waiting for OTP... (${WAITED}s elapsed)"
+    fi
 done
 
 echo "OTP started successfully"
-
-# Test 1: Health check
-echo "Test 1: Health check..."
-HEALTH_RESPONSE=$(curl -s "http://localhost:${VALIDATION_PORT}/otp/actuators/health")
-if echo "$HEALTH_RESPONSE" | grep -q "UP"; then
-    echo "✓ Health check passed"
-else
-    echo "✗ Health check failed: $HEALTH_RESPONSE"
-    kill $OTP_PID
-    exit 1
-fi
+echo "Server info: $RESPONSE"
 
 # Test 2: stopsByRadius query (verify transit data)
 echo "Test 2: stopsByRadius query (verify transit data loaded)..."
