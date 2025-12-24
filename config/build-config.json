@@ -1,0 +1,21 @@
+{
+  "osm": [
+    {
+      "source": "great-britain.osm.pbf",
+      "osmTagMapping": "uk"
+    }
+  ],
+  "transitFeeds": [
+    {
+      "type": "gtfs",
+      "source": "gtfs.zip"
+    }
+  ],
+  "transit": {
+    "maxInterlineDistance": 200,
+    "subwayAccessTime": "2m"
+  },
+  "streetGraph": {
+    "maxAreaNodes": 500000
+  }
+}

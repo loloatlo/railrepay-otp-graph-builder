@@ -1,0 +1,29 @@
+# Build artifacts
+graph-obj/
+*.osm.pbf
+*.zip
+*.jar
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# GCS credentials
+credentials.json
+gcs-key.json
+
+# Node modules (if any)
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
