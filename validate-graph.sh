@@ -34,14 +34,15 @@ OTP_PID=$!
 echo "Waiting for OTP to start..."
 MAX_WAIT=600
 WAITED=0
-HEALTH_QUERY='{"query":"{ serverInfo { version } }"}'
+# Use 'agencies' query - available in GTFS GraphQL API (serverInfo is Transmodel-only)
+HEALTH_QUERY='{"query":"{ agencies { name } }"}'
 while true; do
     RESPONSE=$(curl -s -X POST \
         -H "Content-Type: application/json" \
         -d "$HEALTH_QUERY" \
-        "http://localhost:${VALIDATION_PORT}/otp/routers/default/index/graphql" 2>/dev/null || echo "")
+        "http://127.0.0.1:${VALIDATION_PORT}/otp/routers/default/index/graphql" 2>/dev/null || echo "")
 
-    if echo "$RESPONSE" | grep -q "version"; then
+    if echo "$RESPONSE" | grep -q "agencies"; then
         break
     fi
 
@@ -60,7 +61,7 @@ while true; do
 done
 
 echo "OTP started successfully"
-echo "Server info: $RESPONSE"
+echo "GraphQL response: $RESPONSE"
 
 # Test 2: stopsByRadius query (verify transit data)
 echo "Test 2: stopsByRadius query (verify transit data loaded)..."
