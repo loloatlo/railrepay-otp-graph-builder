@@ -5,8 +5,10 @@ dockerfilePath = "Dockerfile.builder"
 [deploy]
 startCommand = "/opt/build-graph.sh"
 restartPolicyType = "NEVER"
+cronSchedule = "0 4 * * 1"
 numReplicas = 1
 
-# Graph builder is a one-off build job
-# After successful completion, scale replicas to 0 in Railway dashboard
-# Or redeploy to rebuild the graph
+# Graph builder runs as a weekly cron job (Monday 4:00 AM UTC)
+# Runs 90 min after timetable-loader's daily 2:30 AM GTFS generation
+# Adjust frequency based on GTFS service date coverage window
+# To trigger manually: redeploy from Railway dashboard or push a commit
