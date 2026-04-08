@@ -1,4 +1,62 @@
 #!/bin/bash
+
+# ---------------------------------------------------------------------------
+# trigger_railway_redeploy()
+#
+# Posts a serviceInstanceRedeploy mutation to the Railway GraphQL API to
+# trigger a redeploy of otp-router after a successful graph upload.
+#
+# Required env vars:
+#   RAILWAY_API_TOKEN          — Bearer token for Railway API
+#   RAILWAY_SERVICE_ID         — The Railway service ID for otp-router
+#   RAILWAY_ENVIRONMENT_ID     — The Railway environment ID (e.g., production)
+#
+# AC-2: Any failure (network or HTTP error) is logged but exits 0 so the
+# graph build pipeline (which uses set -e) is never aborted.
+# ---------------------------------------------------------------------------
+trigger_railway_redeploy() {
+  if [ -z "${RAILWAY_API_TOKEN:-}" ]; then
+    echo "WARNING: RAILWAY_API_TOKEN not set — skipping Railway redeploy"
+    return 0
+  fi
+
+  if [ -z "${RAILWAY_SERVICE_ID:-}" ]; then
+    echo "WARNING: RAILWAY_SERVICE_ID not set — skipping Railway redeploy"
+    return 0
+  fi
+
+  local environment_id="${RAILWAY_ENVIRONMENT_ID:-}"
+
+  local query='{"query":"mutation { serviceInstanceRedeploy(serviceId: \"'"${RAILWAY_SERVICE_ID}"'\", environmentId: \"'"${environment_id}"'\") { id } }"}'
+
+  local response
+  response=$(curl --silent --show-error --fail-with-body \
+    --max-time 30 \
+    -X POST "https://backboard.railway.app/graphql/v2" \
+    -H "Authorization: Bearer ${RAILWAY_API_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "${query}" 2>&1) || {
+    echo "ERROR: Railway redeploy failed — curl exited non-zero"
+    return 0
+  }
+
+  # Check for GraphQL errors in the response body
+  if echo "${response}" | grep -q '"errors"'; then
+    echo "ERROR: Railway API returned an error response: ${response}"
+    return 0
+  fi
+
+  echo "Railway redeploy triggered successfully for service ${RAILWAY_SERVICE_ID}"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# When sourced by bats tests, stop here — do not execute the build pipeline.
+# ---------------------------------------------------------------------------
+if [ "${BATS_SOURCE_ONLY:-}" = "true" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 set -euo pipefail
 
 # Configuration
@@ -84,3 +142,6 @@ gsutil -m cp -r "${GRAPH_DIR}/"* "gs://${GRAPH_BUCKET}/latest/"
 echo "=== Graph build complete ==="
 echo "Graph uploaded to: gs://${GRAPH_BUCKET}/${GRAPH_OUTPUT_VERSION}/"
 echo "Latest pointer updated: gs://${GRAPH_BUCKET}/latest/"
+
+# Trigger otp-router redeploy so it loads the new graph (AC-1 / AC-2)
+trigger_railway_redeploy
