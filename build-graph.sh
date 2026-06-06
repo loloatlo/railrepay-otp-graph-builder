@@ -110,7 +110,7 @@ verify_otp_router_graph_freshness() {
     return 1
   fi
   local end_date
-  end_date=$(date -d "@${end_epoch}" +%Y-%m-%d)
+  end_date=$(date -u -d "@${end_epoch}" +%Y-%m-%d)
 
   # Compare dates lexicographically (YYYY-MM-DD format sorts correctly as strings)
   if [[ "${end_date}" < "${today}" ]]; then
