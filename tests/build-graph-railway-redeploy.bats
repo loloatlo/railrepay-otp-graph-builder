@@ -393,3 +393,148 @@ teardown() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"OTP_ROUTER_SERVERINFO_URL"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# AC-7: Self-diagnosing curl-failure output
+#
+# Both curl-failure branches MUST echo:
+#   (a) the curl exit code, AND
+#   (b) the captured ${response} body (which includes curl's stderr via 2>&1)
+# before returning 1, so that production log tails are self-diagnosing without
+# needing to re-run the job.
+#
+# The generic message ("curl exited non-zero") may remain but is no longer
+# sufficient on its own.
+#
+# HARNESS MECHANICS:
+#   The curl stub sets STUB_CURL_EXIT (the return code) and echoes
+#   STUB_CURL_RESPONSE to stdout.  Because the call site is:
+#     response=$(curl ... 2>&1) || { ... }
+#   the stub's stdout is captured into ${response} inside the function.
+#   After the non-zero exit, ${response} holds STUB_CURL_RESPONSE text.
+#   The test asserts both the numeric exit code string AND the
+#   STUB_CURL_RESPONSE string appear somewhere in $output.
+#
+# STUB_CURL_RESPONSE values use a distinctive sentinel
+# ("CURL_TRANSPORT_DIAG_TEXT") so assertions are unambiguous — the string
+# cannot appear in $output by accident from any other echo in the function.
+#
+# AC-8 NOTE (not unit-testable here):
+#   AC-8 requires adding the ROOT CAUSE of the transport failure (DNS / TLS /
+#   timeout classification) which depends on inspecting real curl error messages
+#   from live network egress.  This cannot be reproduced deterministically via
+#   the in-process curl stub.  AC-8 is verified at TD-4 as a deploy/live-
+#   evidence gate: Moykle runs the graph-builder against the real Railway API
+#   with a bad token and confirms the log line contains the curl error message.
+#   No bats test is written for AC-8.
+# ---------------------------------------------------------------------------
+
+# AC-7 / trigger_railway_redeploy — curl transport failure (exit 7)
+
+@test "AC-7: trigger_railway_redeploy outputs curl exit code when curl fails (exit 7)" {
+  # AC-7: exit code must appear in the error output so logs are self-diagnosing.
+  # STUB_CURL_EXIT=7 (connection refused); exit code "7" must appear in $output.
+  export RAILWAY_API_TOKEN="test-token-abc123"
+  export RAILWAY_OTP_ROUTER_SERVICE_ID="svc-111aaa"
+  export RAILWAY_OTP_ROUTER_ENVIRONMENT_ID="env-222bbb"
+  export STUB_CURL_EXIT=7
+  export STUB_CURL_RESPONSE="curl: (7) Failed to connect to backboard.railway.app port 443: Connection refused"
+
+  run trigger_railway_redeploy
+  [ "$status" -ne 0 ]
+  # Exit code "7" must appear in error output
+  [[ "$output" == *"7"* ]]
+}
+
+@test "AC-7: trigger_railway_redeploy outputs captured response body when curl fails (exit 7)" {
+  # AC-7: ${response} body (curl's stderr, captured via 2>&1) must appear in output.
+  # Uses a sentinel string "CURL_TRANSPORT_DIAG_TEXT" to make the assertion unambiguous.
+  export RAILWAY_API_TOKEN="test-token-abc123"
+  export RAILWAY_OTP_ROUTER_SERVICE_ID="svc-111aaa"
+  export RAILWAY_OTP_ROUTER_ENVIRONMENT_ID="env-222bbb"
+  export STUB_CURL_EXIT=7
+  export STUB_CURL_RESPONSE="CURL_TRANSPORT_DIAG_TEXT: connection refused sentinel"
+
+  run trigger_railway_redeploy
+  [ "$status" -ne 0 ]
+  # Captured response body must appear — currently DISCARDED (this test is RED)
+  [[ "$output" == *"CURL_TRANSPORT_DIAG_TEXT"* ]]
+}
+
+@test "AC-7: trigger_railway_redeploy outputs curl exit code when curl times out (exit 28)" {
+  # AC-7: timeout is a distinct curl error (exit 28); the exit code must appear.
+  export RAILWAY_API_TOKEN="test-token-abc123"
+  export RAILWAY_OTP_ROUTER_SERVICE_ID="svc-111aaa"
+  export RAILWAY_OTP_ROUTER_ENVIRONMENT_ID="env-222bbb"
+  export STUB_CURL_EXIT=28
+  export STUB_CURL_RESPONSE="curl: (28) Operation timed out after 30000 milliseconds"
+
+  run trigger_railway_redeploy
+  [ "$status" -ne 0 ]
+  # Exit code "28" must appear in error output
+  [[ "$output" == *"28"* ]]
+}
+
+@test "AC-7: trigger_railway_redeploy outputs captured response body when curl times out (exit 28)" {
+  # AC-7: timeout response body must appear — currently DISCARDED (this test is RED).
+  export RAILWAY_API_TOKEN="test-token-abc123"
+  export RAILWAY_OTP_ROUTER_SERVICE_ID="svc-111aaa"
+  export RAILWAY_OTP_ROUTER_ENVIRONMENT_ID="env-222bbb"
+  export STUB_CURL_EXIT=28
+  export STUB_CURL_RESPONSE="CURL_TRANSPORT_DIAG_TEXT: timeout sentinel"
+
+  run trigger_railway_redeploy
+  [ "$status" -ne 0 ]
+  # Captured response body must appear — currently DISCARDED (this test is RED)
+  [[ "$output" == *"CURL_TRANSPORT_DIAG_TEXT"* ]]
+}
+
+# AC-7 / verify_otp_router_graph_freshness — curl transport failure (exit 7)
+
+@test "AC-7: verify_otp_router_graph_freshness outputs curl exit code when curl fails (exit 7)" {
+  # AC-7: same requirement for the freshness-check function — exit code must be logged.
+  export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
+  export STUB_CURL_EXIT=7
+  export STUB_CURL_RESPONSE="curl: (7) Failed to connect to otp-router port 8080: Connection refused"
+
+  run verify_otp_router_graph_freshness
+  [ "$status" -ne 0 ]
+  # Exit code "7" must appear in error output
+  [[ "$output" == *"7"* ]]
+}
+
+@test "AC-7: verify_otp_router_graph_freshness outputs captured response body when curl fails (exit 7)" {
+  # AC-7: ${response} body must appear — currently DISCARDED (this test is RED).
+  export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
+  export STUB_CURL_EXIT=7
+  export STUB_CURL_RESPONSE="CURL_TRANSPORT_DIAG_TEXT: otp-router connection refused sentinel"
+
+  run verify_otp_router_graph_freshness
+  [ "$status" -ne 0 ]
+  # Captured response body must appear — currently DISCARDED (this test is RED)
+  [[ "$output" == *"CURL_TRANSPORT_DIAG_TEXT"* ]]
+}
+
+@test "AC-7: verify_otp_router_graph_freshness outputs curl exit code when curl times out (exit 28)" {
+  # AC-7: timeout exit code must appear for the freshness-check function too.
+  export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
+  export STUB_CURL_EXIT=28
+  export STUB_CURL_RESPONSE="curl: (28) Operation timed out after 30000 milliseconds with otp-router"
+
+  run verify_otp_router_graph_freshness
+  [ "$status" -ne 0 ]
+  # Exit code "28" must appear in error output
+  [[ "$output" == *"28"* ]]
+}
+
+@test "AC-7: verify_otp_router_graph_freshness outputs captured response body when curl times out (exit 28)" {
+  # AC-7: timeout response body must appear — currently DISCARDED (this test is RED).
+  export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
+  export STUB_CURL_EXIT=28
+  export STUB_CURL_RESPONSE="CURL_TRANSPORT_DIAG_TEXT: otp-router timeout sentinel"
+
+  run verify_otp_router_graph_freshness
+  [ "$status" -ne 0 ]
+  # Captured response body must appear — currently DISCARDED (this test is RED)
+  [[ "$output" == *"CURL_TRANSPORT_DIAG_TEXT"* ]]
+}
