@@ -40,12 +40,17 @@ trigger_railway_redeploy() {
 
   local response
   response=$(curl --silent --show-error --fail-with-body \
-    --max-time 30 \
+    --connect-timeout 10 \
+    --max-time 60 \
+    --retry 3 --retry-connrefused --retry-delay 2 \
     -X POST "https://backboard.railway.app/graphql/v2" \
     -H "Authorization: Bearer ${RAILWAY_API_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "${query}" 2>&1) || {
+    local curl_exit=$?
     echo "ERROR: Railway redeploy failed — curl exited non-zero"
+    echo "ERROR: curl exit code: ${curl_exit}"
+    echo "ERROR: curl response: ${response}"
     return 1
   }
 
@@ -86,11 +91,16 @@ verify_otp_router_graph_freshness() {
 
   local response
   response=$(curl --silent --show-error --fail-with-body \
-    --max-time 30 \
+    --connect-timeout 10 \
+    --max-time 60 \
+    --retry 3 --retry-connrefused --retry-delay 2 \
     -X POST "${OTP_ROUTER_SERVERINFO_URL}" \
     -H "Content-Type: application/json" \
     -d "${query}" 2>&1) || {
+    local curl_exit=$?
     echo "ERROR: otp-router serverInfo query failed — curl exited non-zero"
+    echo "ERROR: curl exit code: ${curl_exit}"
+    echo "ERROR: curl response: ${response}"
     return 1
   }
 
