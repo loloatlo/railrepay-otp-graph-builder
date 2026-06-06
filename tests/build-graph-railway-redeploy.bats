@@ -232,14 +232,21 @@ teardown() {
 #   The tests below reproduce this exact production bug so they encode a
 #   faithful regression guard.
 #
-# Epoch values used in tests (all UTC):
-#   Fresh  : 1782860400 → 2026-07-01  (end > today 2026-06-06 → exit 0)
-#   Stale  : 1779231600 → 2026-05-20  (REAL production stale value; end < today → exit 1)
-#   Boundary: 1780700400 → 2026-06-06 (end == today exactly → exit 0)
+# Epoch values used in tests — ALL chosen at 12:00:00 UTC so they render
+# identically under date -u on any host timezone (BST, UTC, US/Eastern, etc.).
+# Epochs at midnight-local caused the original test to pass only on a BST host
+# while failing on the UTC Railway host (self-fix applied TD-3, 2026-06-06).
 #
-# Epoch conversion the implementation must use (POSIX date):
+#   Fresh   : 1782907200 → 2026-07-01 12:00 UTC (end > today → exit 0)
+#   Stale   : 1779278400 → 2026-05-20 12:00 UTC (REAL incident date; end < today → exit 1)
+#   Boundary: 1780747200 → 2026-06-06 12:00 UTC (end == today → exit 0)
+#
+# Epoch conversion the implementation must use (POSIX date — UTC flag REQUIRED):
 #   end_date=$(date -u -d "@${end_epoch}" +%Y-%m-%d)
 # then compare end_date lexicographically against TODAY_DATE (YYYY-MM-DD).
+# Using bare "date -d" (no -u) is WRONG: on a UTC host the boundary epoch
+# 1780747200 still renders 2026-06-06, but midnight-boundary epochs like
+# 1780700400 rendered differently on BST vs UTC hosts — see TD-OTP-007 self-fix.
 #
 # Stub strategy: reuse the curl stub; set STUB_CURL_RESPONSE to the correct
 # epoch-integer shape.  OTP_ROUTER_SERVERINFO_URL is still the poll target.
@@ -261,7 +268,8 @@ teardown() {
   # assert the -d argument contains "serviceTimeRange" and does not contain "serverInfo".
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
   # Return a valid fresh response so the function reaches the query-dispatch code
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1782860400}}}'
+  # end=1782907200 = 2026-07-01 12:00 UTC (noon-UTC, timezone-unambiguous)
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1782907200}}}'
   export STUB_CURL_EXIT=0
 
   # Override curl to capture the -d payload into CAPTURED_CURL_BODY
@@ -296,9 +304,9 @@ teardown() {
 
 @test "AC-5: verify_otp_router_graph_freshness exits 0 when serviceTimeRange end epoch covers today (fresh graph)" {
   # TODAY_DATE = 2026-06-06 (set in setup)
-  # end epoch 1782860400 = 2026-07-01 UTC — after today → fresh
+  # end epoch 1782907200 = 2026-07-01 12:00 UTC (noon-UTC — unambiguous on all host timezones)
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1782860400}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1782907200}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -310,10 +318,11 @@ teardown() {
 
 @test "AC-5: verify_otp_router_graph_freshness exits non-zero when serviceTimeRange end epoch is before today (stale graph)" {
   # TODAY_DATE = 2026-06-06
-  # end epoch 1779231600 = 2026-05-20 UTC — REAL production stale baseline from the incident.
-  # This is the exact value that caused otp-router to serve outdated routing data for 18 days.
+  # end epoch 1779278400 = 2026-05-20 12:00 UTC (noon-UTC).
+  # Represents the REAL production stale date (2026-05-20) from the incident — exact midnight epoch
+  # 1779231600 was replaced with the noon-UTC equivalent to be timezone-unambiguous (self-fix TD-3).
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1779231600}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1779278400}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -324,9 +333,12 @@ teardown() {
 # AC-5: end epoch equals today exactly → pass (boundary case, not stale)
 
 @test "AC-5: verify_otp_router_graph_freshness exits 0 when serviceTimeRange end epoch equals today (boundary)" {
-  # end epoch 1780700400 = 2026-06-06 UTC — exactly today, acceptable (not stale)
+  # end epoch 1780747200 = 2026-06-06 12:00 UTC (noon-UTC — unambiguous on all host timezones).
+  # Original epoch 1780700400 = 2026-06-05 23:00 UTC (midnight BST) was timezone-ambiguous:
+  # rendered 2026-06-06 on a BST host but 2026-06-05 on a UTC Railway host → would FAIL in
+  # production. Corrected in self-fix during TD-3 (2026-06-06). See TD-OTP-007.
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1780700400}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1780747200}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
