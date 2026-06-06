@@ -62,8 +62,8 @@ trigger_railway_redeploy() {
 # ---------------------------------------------------------------------------
 # verify_otp_router_graph_freshness()
 #
-# POSTs a serverInfo GraphQL query to otp-router and verifies that the
-# reported transitServiceTimeRange.end covers today.  If the graph is stale
+# POSTs a serviceTimeRange GraphQL query to otp-router and verifies that the
+# reported serviceTimeRange.end covers today.  If the graph is stale
 # (frozen at a past date) the function exits non-zero so the pipeline fails
 # visibly rather than silently serving outdated routing data.
 #
@@ -82,7 +82,7 @@ verify_otp_router_graph_freshness() {
 
   local today="${TODAY_DATE:-$(date +%Y-%m-%d)}"
 
-  local query='{"query":"{ serverInfo { transitServiceTimeRange { start end } } }"}'
+  local query='{"query":"{ serviceTimeRange { start end } }"}'
 
   local response
   response=$(curl --silent --show-error --fail-with-body \
@@ -100,15 +100,17 @@ verify_otp_router_graph_freshness() {
     return 1
   fi
 
-  # Extract the end date from the response
-  # Expected shape: {"data":{"serverInfo":{"transitServiceTimeRange":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}}}}
-  local end_date
-  end_date=$(echo "${response}" | grep -o '"end":"[^"]*"' | head -1 | sed 's/"end":"//;s/"//')
-
-  if [ -z "${end_date}" ]; then
-    echo "ERROR: Could not parse serviceTimeRange.end from serverInfo response: ${response}"
+  # Extract the end epoch integer and convert to YYYY-MM-DD
+  # Expected shape: {"data":{"serviceTimeRange":{"start":<epoch-int>,"end":<epoch-int>}}}
+  # (OTP 2.x real contract — no serverInfo wrapper, epoch integers not ISO strings)
+  local end_epoch
+  end_epoch=$(echo "${response}" | grep -o '"end":[0-9]*' | head -1 | cut -d: -f2)
+  if [ -z "${end_epoch}" ]; then
+    echo "ERROR: Could not parse serviceTimeRange.end from response: ${response}"
     return 1
   fi
+  local end_date
+  end_date=$(date -d "@${end_epoch}" +%Y-%m-%d)
 
   # Compare dates lexicographically (YYYY-MM-DD format sorts correctly as strings)
   if [[ "${end_date}" < "${today}" ]]; then
