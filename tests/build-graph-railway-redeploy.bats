@@ -21,9 +21,10 @@
 #                   MISSING REQUIRED VARS → exit 1 unless
 #                   RAILWAY_REDEPLOY_OPTIONAL=true (then silent skip + exit 0).
 #   AC-5 (new):     POST-REDEPLOY GATE: after triggering the redeploy, poll
-#                   otp-router's serverInfo endpoint and assert the reported
-#                   serviceTimeRange covers today.  If stale within the poll
-#                   window → exit non-zero.
+#                   otp-router's serviceTimeRange GraphQL field (OTP 2.x real
+#                   contract — epoch integers, NO serverInfo wrapper) and assert
+#                   the reported end epoch covers today.  If stale within the
+#                   poll window → exit non-zero.
 #
 # DESIGN DECISION (Jessie, TD-1, 2026-06-06) — missing-required-var contract:
 #   In a cron context, silent skip on missing creds caused the June incident.
@@ -208,15 +209,40 @@ teardown() {
 # AC-5: Post-redeploy serviceTimeRange gate
 #
 # After triggering the redeploy, verify_otp_router_graph_freshness() polls the
-# otp-router GraphQL serverInfo endpoint and asserts the reported
-# serviceTimeRange covers TODAY.  If the range is stale (frozen at a past
-# date), the function exits non-zero so the build is marked failed.
+# otp-router GraphQL endpoint and asserts the reported serviceTimeRange.end
+# covers today.  If the range is stale (frozen at a past date) the function
+# exits non-zero so the build is marked failed.
 #
-# Stub strategy: the function must accept OTP_ROUTER_SERVERINFO_URL as the
-# poll target.  We reuse the curl stub to return different serverInfo bodies.
+# *** REAL OTP 2.x CONTRACT (corrected 2026-06-06, TD-OTP-007 re-opened TD-1)
 #
-# serverInfo GraphQL response shape (OTP 2.x):
-#   {"data":{"serverInfo":{"transitServiceTimeRange":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}}}}
+#   PRIOR stub (WRONG — fabricated, never matched live API):
+#     query:    { serverInfo { transitServiceTimeRange { start end } } }
+#     response: {"data":{"serverInfo":{"transitServiceTimeRange":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}}}}
+#
+#   CORRECT OTP 2.x contract (verified against live
+#     https://railrepay-otp-router-production.up.railway.app/otp/routers/default/index/graphql):
+#     query:    { serviceTimeRange { start end } }    ← top-level field, NO serverInfo wrapper
+#     response: {"data":{"serviceTimeRange":{"start":<epoch-int>,"end":<epoch-int>}}}
+#                                                      ← Unix epoch seconds, NOT ISO strings
+#
+#   Querying "serverInfo" against the live OTP 2.x router returns:
+#     {"errors":[{"message":"FieldUndefined@[serverInfo]"}]}
+#
+#   Real live stale baseline (2026-06-04 incident): end = 1779231600 = 2026-05-20 UTC
+#   The tests below reproduce this exact production bug so they encode a
+#   faithful regression guard.
+#
+# Epoch values used in tests (all UTC):
+#   Fresh  : 1782860400 → 2026-07-01  (end > today 2026-06-06 → exit 0)
+#   Stale  : 1779231600 → 2026-05-20  (REAL production stale value; end < today → exit 1)
+#   Boundary: 1780700400 → 2026-06-06 (end == today exactly → exit 0)
+#
+# Epoch conversion the implementation must use (POSIX date):
+#   end_date=$(date -u -d "@${end_epoch}" +%Y-%m-%d)
+# then compare end_date lexicographically against TODAY_DATE (YYYY-MM-DD).
+#
+# Stub strategy: reuse the curl stub; set STUB_CURL_RESPONSE to the correct
+# epoch-integer shape.  OTP_ROUTER_SERVERINFO_URL is still the poll target.
 # ---------------------------------------------------------------------------
 # AC-5: function is declared
 
@@ -224,13 +250,55 @@ teardown() {
   declare -f verify_otp_router_graph_freshness > /dev/null
 }
 
-# AC-5: today falls within serviceTimeRange → exit 0
+# AC-5: verify the script POSTs the correct OTP 2.x query (serviceTimeRange, NOT serverInfo)
 
-@test "AC-5: verify_otp_router_graph_freshness exits 0 when serviceTimeRange end covers today" {
-  # TODAY_DATE = 2026-06-06 (set in setup)
-  # Range: 2026-01-01 to 2026-12-31 — today is within range
+@test "AC-5: verify_otp_router_graph_freshness queries serviceTimeRange (not serverInfo) and does not reference transitServiceTimeRange" {
+  # The script must POST a body containing "serviceTimeRange" at the top level of the selection set.
+  # It must NOT contain "serverInfo" or "transitServiceTimeRange" — those fields do not exist in
+  # the live OTP 2.x router and return FieldUndefined errors.
+  #
+  # Strategy: capture what curl receives by overriding curl to record its arguments, then
+  # assert the -d argument contains "serviceTimeRange" and does not contain "serverInfo".
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
-  export STUB_CURL_RESPONSE='{"data":{"serverInfo":{"transitServiceTimeRange":{"start":"2026-01-01","end":"2026-12-31"}}}}'
+  # Return a valid fresh response so the function reaches the query-dispatch code
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1782860400}}}'
+  export STUB_CURL_EXIT=0
+
+  # Override curl to capture the -d payload into CAPTURED_CURL_BODY
+  CAPTURED_CURL_BODY_FILE=$(mktemp)
+  curl() {
+    local prev=""
+    for arg in "$@"; do
+      if [ "$prev" = "-d" ]; then
+        echo "$arg" > "${CAPTURED_CURL_BODY_FILE}"
+      fi
+      prev="$arg"
+    done
+    echo "${STUB_CURL_RESPONSE:-}"
+    return "${STUB_CURL_EXIT:-0}"
+  }
+  export -f curl
+
+  run verify_otp_router_graph_freshness
+
+  local body
+  body=$(cat "${CAPTURED_CURL_BODY_FILE}" 2>/dev/null || echo "")
+  rm -f "${CAPTURED_CURL_BODY_FILE}"
+
+  # Must reference the real OTP 2.x field
+  [[ "$body" == *"serviceTimeRange"* ]]
+  # Must NOT reference the non-existent OTP 2.x fields
+  [[ "$body" != *"serverInfo"* ]]
+  [[ "$body" != *"transitServiceTimeRange"* ]]
+}
+
+# AC-5: today falls within serviceTimeRange (epoch end > today) → exit 0
+
+@test "AC-5: verify_otp_router_graph_freshness exits 0 when serviceTimeRange end epoch covers today (fresh graph)" {
+  # TODAY_DATE = 2026-06-06 (set in setup)
+  # end epoch 1782860400 = 2026-07-01 UTC — after today → fresh
+  export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1782860400}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -238,13 +306,14 @@ teardown() {
   [[ "$output" == *"serviceTimeRange"* ]] || [[ "$output" == *"fresh"* ]] || [[ "$output" == *"OK"* ]]
 }
 
-# AC-5: range end is before today (stale graph, frozen date) → non-zero exit
+# AC-5: range end epoch is before today (stale graph — reproduces the 2026-06-04 production incident)
 
-@test "AC-5: verify_otp_router_graph_freshness exits non-zero when serviceTimeRange end is before today (stale graph)" {
+@test "AC-5: verify_otp_router_graph_freshness exits non-zero when serviceTimeRange end epoch is before today (stale graph)" {
   # TODAY_DATE = 2026-06-06
-  # Range: 2026-01-01 to 2026-05-20 — end is BEFORE today → frozen graph
+  # end epoch 1779231600 = 2026-05-20 UTC — REAL production stale baseline from the incident.
+  # This is the exact value that caused otp-router to serve outdated routing data for 18 days.
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
-  export STUB_CURL_RESPONSE='{"data":{"serverInfo":{"transitServiceTimeRange":{"start":"2026-01-01","end":"2026-05-20"}}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1779231600}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -252,21 +321,21 @@ teardown() {
   [[ "$output" == *"stale"* ]] || [[ "$output" == *"STALE"* ]] || [[ "$output" == *"ERROR"* ]]
 }
 
-# AC-5: range end exactly equals today → pass (boundary case)
+# AC-5: end epoch equals today exactly → pass (boundary case, not stale)
 
-@test "AC-5: verify_otp_router_graph_freshness exits 0 when serviceTimeRange end equals today (boundary)" {
-  # Range end = today exactly → acceptable (not stale)
+@test "AC-5: verify_otp_router_graph_freshness exits 0 when serviceTimeRange end epoch equals today (boundary)" {
+  # end epoch 1780700400 = 2026-06-06 UTC — exactly today, acceptable (not stale)
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
-  export STUB_CURL_RESPONSE='{"data":{"serverInfo":{"transitServiceTimeRange":{"start":"2026-01-01","end":"2026-06-06"}}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1780700400}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
   [ "$status" -eq 0 ]
 }
 
-# AC-5: serverInfo query fails (otp-router unreachable after redeploy) → non-zero exit with clear error
+# AC-5: otp-router unreachable after redeploy (curl failure) → non-zero exit with clear error
 
-@test "AC-5: verify_otp_router_graph_freshness exits non-zero when otp-router serverInfo is unreachable" {
+@test "AC-5: verify_otp_router_graph_freshness exits non-zero when otp-router is unreachable (curl exit 7)" {
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
   export STUB_CURL_EXIT=7
   export STUB_CURL_RESPONSE=""
@@ -276,9 +345,24 @@ teardown() {
   [[ "$output" == *"ERROR"* ]] || [[ "$output" == *"unreachable"* ]] || [[ "$output" == *"failed"* ]]
 }
 
-# AC-5: serverInfo returns a GraphQL errors body (OTP startup still in progress) → non-zero
+# AC-5: OTP 2.x FieldUndefined error (simulates what the live router returns when queried with the
+# WRONG serverInfo shape — real error seen by Moykle during TD-4 deploy verification)
 
-@test "AC-5: verify_otp_router_graph_freshness exits non-zero when serverInfo returns GraphQL errors (OTP loading)" {
+@test "AC-5: verify_otp_router_graph_freshness exits non-zero when OTP returns FieldUndefined GraphQL error (wrong query)" {
+  # Real error body returned by live OTP 2.x router when queried with the old serverInfo shape.
+  # This test would have caught the contract mismatch before deploy.
+  export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
+  export STUB_CURL_RESPONSE='{"errors":[{"message":"FieldUndefined@[serverInfo]"}]}'
+  export STUB_CURL_EXIT=0
+
+  run verify_otp_router_graph_freshness
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"ERROR"* ]] || [[ "$output" == *"error"* ]]
+}
+
+# AC-5: generic GraphQL errors body (OTP startup still in progress) → non-zero
+
+@test "AC-5: verify_otp_router_graph_freshness exits non-zero when serviceTimeRange returns GraphQL errors (OTP loading)" {
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
   export STUB_CURL_RESPONSE='{"errors":[{"message":"Graph is loading"}]}'
   export STUB_CURL_EXIT=0
