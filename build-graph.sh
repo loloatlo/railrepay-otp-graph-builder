@@ -7,27 +7,36 @@
 # trigger a redeploy of otp-router after a successful graph upload.
 #
 # Required env vars:
-#   RAILWAY_API_TOKEN          — Bearer token for Railway API
-#   RAILWAY_SERVICE_ID         — The Railway service ID for otp-router
-#   RAILWAY_ENVIRONMENT_ID     — The Railway environment ID (e.g., production)
+#   RAILWAY_API_TOKEN                  — Bearer token for Railway API
+#   RAILWAY_OTP_ROUTER_SERVICE_ID      — The Railway service ID for otp-router
+#   RAILWAY_OTP_ROUTER_ENVIRONMENT_ID  — The Railway environment ID (e.g., production)
 #
-# AC-2: Any failure (network or HTTP error) is logged but exits 0 so the
-# graph build pipeline (which uses set -e) is never aborted.
+# AC-4 (revised): Missing required vars → exit 1 (hard fail) unless
+# RAILWAY_REDEPLOY_OPTIONAL=true (then log a skip notice and return 0).
+# curl failure, timeout, or GraphQL errors body → exit 1 (propagated).
 # ---------------------------------------------------------------------------
 trigger_railway_redeploy() {
   if [ -z "${RAILWAY_API_TOKEN:-}" ]; then
-    echo "WARNING: RAILWAY_API_TOKEN not set — skipping Railway redeploy"
-    return 0
+    if [ "${RAILWAY_REDEPLOY_OPTIONAL:-}" = "true" ]; then
+      echo "INFO: RAILWAY_API_TOKEN not set — skipping Railway redeploy (optional)"
+      return 0
+    fi
+    echo "ERROR: RAILWAY_API_TOKEN is required but not set"
+    return 1
   fi
 
-  if [ -z "${RAILWAY_SERVICE_ID:-}" ]; then
-    echo "WARNING: RAILWAY_SERVICE_ID not set — skipping Railway redeploy"
-    return 0
+  if [ -z "${RAILWAY_OTP_ROUTER_SERVICE_ID:-}" ]; then
+    if [ "${RAILWAY_REDEPLOY_OPTIONAL:-}" = "true" ]; then
+      echo "INFO: RAILWAY_OTP_ROUTER_SERVICE_ID not set — skipping Railway redeploy (optional)"
+      return 0
+    fi
+    echo "ERROR: RAILWAY_OTP_ROUTER_SERVICE_ID is required but not set"
+    return 1
   fi
 
-  local environment_id="${RAILWAY_ENVIRONMENT_ID:-}"
+  local environment_id="${RAILWAY_OTP_ROUTER_ENVIRONMENT_ID:-}"
 
-  local query='{"query":"mutation { serviceInstanceRedeploy(serviceId: \"'"${RAILWAY_SERVICE_ID}"'\", environmentId: \"'"${environment_id}"'\") { id } }"}'
+  local query='{"query":"mutation { serviceInstanceRedeploy(serviceId: \"'"${RAILWAY_OTP_ROUTER_SERVICE_ID}"'\", environmentId: \"'"${environment_id}"'\") { id } }"}'
 
   local response
   response=$(curl --silent --show-error --fail-with-body \
@@ -37,16 +46,77 @@ trigger_railway_redeploy() {
     -H "Content-Type: application/json" \
     -d "${query}" 2>&1) || {
     echo "ERROR: Railway redeploy failed — curl exited non-zero"
-    return 0
+    return 1
   }
 
   # Check for GraphQL errors in the response body
   if echo "${response}" | grep -q '"errors"'; then
     echo "ERROR: Railway API returned an error response: ${response}"
-    return 0
+    return 1
   fi
 
-  echo "Railway redeploy triggered successfully for service ${RAILWAY_SERVICE_ID}"
+  echo "Railway redeploy triggered successfully for service ${RAILWAY_OTP_ROUTER_SERVICE_ID}"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# verify_otp_router_graph_freshness()
+#
+# POSTs a serverInfo GraphQL query to otp-router and verifies that the
+# reported transitServiceTimeRange.end covers today.  If the graph is stale
+# (frozen at a past date) the function exits non-zero so the pipeline fails
+# visibly rather than silently serving outdated routing data.
+#
+# Required env vars:
+#   OTP_ROUTER_SERVERINFO_URL — Full URL for the otp-router GraphQL endpoint
+#
+# Optional env vars:
+#   TODAY_DATE — Override for "today" (YYYY-MM-DD).  Used by tests for
+#                deterministic date comparison.  Defaults to $(date +%Y-%m-%d).
+# ---------------------------------------------------------------------------
+verify_otp_router_graph_freshness() {
+  if [ -z "${OTP_ROUTER_SERVERINFO_URL:-}" ]; then
+    echo "ERROR: OTP_ROUTER_SERVERINFO_URL is required but not set"
+    return 1
+  fi
+
+  local today="${TODAY_DATE:-$(date +%Y-%m-%d)}"
+
+  local query='{"query":"{ serverInfo { transitServiceTimeRange { start end } } }"}'
+
+  local response
+  response=$(curl --silent --show-error --fail-with-body \
+    --max-time 30 \
+    -X POST "${OTP_ROUTER_SERVERINFO_URL}" \
+    -H "Content-Type: application/json" \
+    -d "${query}" 2>&1) || {
+    echo "ERROR: otp-router serverInfo query failed — curl exited non-zero"
+    return 1
+  }
+
+  # Check for GraphQL errors in the response body
+  if echo "${response}" | grep -q '"errors"'; then
+    echo "ERROR: otp-router serverInfo returned GraphQL error response: ${response}"
+    return 1
+  fi
+
+  # Extract the end date from the response
+  # Expected shape: {"data":{"serverInfo":{"transitServiceTimeRange":{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}}}}
+  local end_date
+  end_date=$(echo "${response}" | grep -o '"end":"[^"]*"' | head -1 | sed 's/"end":"//;s/"//')
+
+  if [ -z "${end_date}" ]; then
+    echo "ERROR: Could not parse serviceTimeRange.end from serverInfo response: ${response}"
+    return 1
+  fi
+
+  # Compare dates lexicographically (YYYY-MM-DD format sorts correctly as strings)
+  if [[ "${end_date}" < "${today}" ]]; then
+    echo "ERROR: otp-router graph is STALE — serviceTimeRange end=${end_date} is before today=${today}"
+    return 1
+  fi
+
+  echo "INFO: otp-router serviceTimeRange OK — end=${end_date} covers today=${today}"
   return 0
 }
 
@@ -145,3 +215,6 @@ echo "Latest pointer updated: gs://${GRAPH_BUCKET}/latest/"
 
 # Trigger otp-router redeploy so it loads the new graph (AC-1 / AC-2)
 trigger_railway_redeploy
+
+# Verify otp-router loaded the fresh graph (AC-5)
+verify_otp_router_graph_freshness
