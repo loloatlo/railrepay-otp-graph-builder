@@ -36,7 +36,7 @@ trigger_railway_redeploy() {
 
   local environment_id="${RAILWAY_OTP_ROUTER_ENVIRONMENT_ID:-}"
 
-  local query='{"query":"mutation { serviceInstanceRedeploy(serviceId: \"'"${RAILWAY_OTP_ROUTER_SERVICE_ID}"'\", environmentId: \"'"${environment_id}"'\") { id } }"}'
+  local query='{"query":"mutation { serviceInstanceRedeploy(serviceId: \"'"${RAILWAY_OTP_ROUTER_SERVICE_ID}"'\", environmentId: \"'"${environment_id}"'\") }"}'
 
   local response
   response=$(curl --silent --show-error --fail-with-body \

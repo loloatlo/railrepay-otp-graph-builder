@@ -1,4 +1,87 @@
 #!/bin/bash
+
+# ---------------------------------------------------------------------------
+# check_graph_freshness()
+#
+# Queries the OTP GraphQL endpoint for serviceTimeRange and verifies that
+# the graph's end epoch covers today (within a configurable tolerance window).
+#
+# Required env vars:
+#   OTP_VALIDATION_URL — Full URL for the OTP GraphQL endpoint.
+#                        If not set, falls back to constructing from
+#                        VALIDATION_PORT (default 8080).
+#
+# Optional env vars:
+#   TODAY_DATE           — Override for "today" (YYYY-MM-DD). Defaults to
+#                          $(date +%Y-%m-%d). Used by tests for deterministic
+#                          date comparisons.
+#   GRAPH_FRESHNESS_DAYS — Tolerance window in days (default 0).
+#                          A graph ending this many days before today is still
+#                          considered fresh.
+#                          end_date >= (today - GRAPH_FRESHNESS_DAYS) → exit 0
+#                          end_date <  (today - GRAPH_FRESHNESS_DAYS) → exit 1
+# ---------------------------------------------------------------------------
+check_graph_freshness() {
+  local validation_url="${OTP_VALIDATION_URL:-http://localhost:${VALIDATION_PORT:-8080}/otp/routers/default/index/graphql}"
+
+  local today="${TODAY_DATE:-$(date +%Y-%m-%d)}"
+  local freshness_days="${GRAPH_FRESHNESS_DAYS:-0}"
+
+  # Compute threshold date: today - GRAPH_FRESHNESS_DAYS
+  local threshold_date
+  if [ "${freshness_days}" -eq 0 ]; then
+    threshold_date="${today}"
+  else
+    threshold_date=$(date -u -d "${today} - ${freshness_days} days" +%Y-%m-%d)
+  fi
+
+  local query='{"query":"{ serviceTimeRange { start end } }"}'
+
+  local response
+  response=$(curl --silent --show-error \
+    -X POST "${validation_url}" \
+    -H "Content-Type: application/json" \
+    -d "${query}" 2>&1) || {
+    local curl_exit=$?
+    echo "ERROR: OTP serviceTimeRange query failed — curl exited non-zero (exit ${curl_exit})"
+    echo "ERROR: curl response: ${response}"
+    return 1
+  }
+
+  # Check for GraphQL errors in the response body
+  if echo "${response}" | grep -q '"errors"'; then
+    echo "ERROR: OTP serviceTimeRange returned GraphQL error: ${response}"
+    return 1
+  fi
+
+  # Extract the end epoch integer and convert to YYYY-MM-DD (UTC)
+  local end_epoch
+  end_epoch=$(echo "${response}" | grep -o '"end":[0-9]*' | head -1 | cut -d: -f2)
+  if [ -z "${end_epoch}" ]; then
+    echo "ERROR: Could not parse serviceTimeRange.end from response: ${response}"
+    return 1
+  fi
+
+  local end_date
+  end_date=$(date -u -d "@${end_epoch}" +%Y-%m-%d)
+
+  # Compare lexicographically (YYYY-MM-DD sorts correctly as strings)
+  if [[ "${end_date}" < "${threshold_date}" ]]; then
+    echo "ERROR: Graph is STALE — serviceTimeRange end=${end_date} is before threshold=${threshold_date} (today=${today}, GRAPH_FRESHNESS_DAYS=${freshness_days})"
+    return 1
+  fi
+
+  echo "INFO: Graph freshness OK — serviceTimeRange end=${end_date} covers threshold=${threshold_date} (today=${today})"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# When sourced by bats tests, stop here — do not execute the validation pipeline.
+# ---------------------------------------------------------------------------
+if [ "${BATS_SOURCE_ONLY:-}" = "true" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 set -euo pipefail
 
 GRAPH_DIR="${1:-/var/otp/graphs/default}"
@@ -82,7 +165,8 @@ fi
 
 # Test 3: Coordinate routing (verify OSM data)
 echo "Test 3: Coordinate routing (verify OSM data loaded)..."
-PLAN_QUERY='{"query":"{ plan(from:{lat:51.481,lon:-3.179}, to:{lat:51.621,lon:-3.944}, date:\"2025-01-15\", time:\"09:00:00\") { itineraries { legs { mode startTime } } } }"}'
+PLAN_DATE="$(date +%Y-%m-%d)"
+PLAN_QUERY='{"query":"{ plan(from:{lat:51.481,lon:-3.179}, to:{lat:51.621,lon:-3.944}, date:\"'"${PLAN_DATE}"'\", time:\"09:00:00\") { itineraries { legs { mode startTime } } } }"}'
 PLAN_RESPONSE=$(curl -s -X POST \
     -H "Content-Type: application/json" \
     -d "$PLAN_QUERY" \
@@ -98,6 +182,15 @@ elif echo "$PLAN_RESPONSE" | grep -q "itineraries"; then
 else
     echo "⚠ Routing response unclear: $PLAN_RESPONSE"
 fi
+
+# Test 4: Graph freshness check (verify serviceTimeRange covers today)
+echo "Test 4: Graph freshness check (serviceTimeRange covers today)..."
+OTP_VALIDATION_URL="http://localhost:${VALIDATION_PORT}/otp/routers/default/index/graphql"
+export OTP_VALIDATION_URL
+check_graph_freshness || {
+    kill $OTP_PID
+    exit 1
+}
 
 # Cleanup
 kill $OTP_PID
