@@ -133,6 +133,107 @@ verify_otp_router_graph_freshness() {
 }
 
 # ---------------------------------------------------------------------------
+# wait_for_otp_router_reload()
+#
+# Polls otp-router serviceTimeRange until its reported end epoch advances past
+# PRE_REDEPLOY_END_EPOCH (proving the new graph has loaded), or until
+# OTP_RELOAD_POLL_TIMEOUT is exhausted.
+#
+# Must be called AFTER trigger_railway_redeploy() and BEFORE
+# verify_otp_router_graph_freshness() to eliminate the race where verify sees
+# the old graph because otp-router hasn't finished reloading the ~2.2 GB
+# graph yet (BL-334 / the 2026-06-18 false-CRASHED incident).
+#
+# Optional env vars (all have safe defaults — unset does NOT abort under set -u):
+#   PRE_REDEPLOY_END_EPOCH   — Baseline end epoch captured before the redeploy.
+#                              If not set, the function queries otp-router for
+#                              the current end and uses that as the baseline.
+#   OTP_RELOAD_POLL_TIMEOUT  — Total poll budget in seconds (default: 900 = 15 min).
+#   OTP_RELOAD_POLL_INTERVAL — Sleep duration between polls in seconds (default: 30).
+#
+# Required env vars (inherited from the surrounding pipeline):
+#   OTP_ROUTER_SERVERINFO_URL — GraphQL endpoint for otp-router.
+#
+# Exit codes:
+#   0 — end advanced past PRE_REDEPLOY_END_EPOCH; new graph confirmed loaded.
+#   1 — timeout exhausted without advancement; logs diagnosable message with
+#       timeout value so Railway build logs are self-diagnosing.
+# ---------------------------------------------------------------------------
+wait_for_otp_router_reload() {
+  if [ -z "${OTP_ROUTER_SERVERINFO_URL:-}" ]; then
+    echo "ERROR: OTP_ROUTER_SERVERINFO_URL is required but not set"
+    return 1
+  fi
+
+  local poll_timeout="${OTP_RELOAD_POLL_TIMEOUT:-900}"
+  local poll_interval="${OTP_RELOAD_POLL_INTERVAL:-30}"
+
+  local query='{"query":"{ serviceTimeRange { start end } }"}'
+
+  # Resolve the baseline: use PRE_REDEPLOY_END_EPOCH if provided by the caller;
+  # otherwise query otp-router now and use its current end as the baseline.
+  local baseline_end="${PRE_REDEPLOY_END_EPOCH:-}"
+  if [ -z "${baseline_end}" ]; then
+    echo "INFO: No pre-redeploy baseline provided — querying otp-router for current end to use as baseline"
+    local baseline_response
+    baseline_response=$(curl --silent --show-error --fail-with-body \
+      --connect-timeout 10 \
+      --max-time 60 \
+      -X POST "${OTP_ROUTER_SERVERINFO_URL}" \
+      -H "Content-Type: application/json" \
+      -d "${query}" 2>&1) || true
+    baseline_end=$(echo "${baseline_response}" | grep -o '"end":[0-9]*' | head -1 | cut -d: -f2)
+    if [ -z "${baseline_end}" ]; then
+      echo "INFO: Could not determine baseline end from otp-router; poll will use 0 as baseline"
+      baseline_end=0
+    else
+      echo "INFO: Baseline serviceTimeRange.end = ${baseline_end} (captured before redeploy)"
+    fi
+  fi
+
+  # Calculate maximum number of poll attempts.
+  # Use max(interval, 1) to avoid division-by-zero when interval=0.
+  local effective_interval="${poll_interval}"
+  if [ "${effective_interval}" -le 0 ] 2>/dev/null; then
+    effective_interval=1
+  fi
+  local max_attempts=$(( poll_timeout / effective_interval ))
+  if [ "${max_attempts}" -lt 1 ]; then
+    max_attempts=1
+  fi
+
+  local attempt=0
+  local elapsed=0
+
+  while [ "${attempt}" -lt "${max_attempts}" ]; do
+    local response
+    response=$(curl --silent --show-error --fail-with-body \
+      --connect-timeout 10 \
+      --max-time 60 \
+      -X POST "${OTP_ROUTER_SERVERINFO_URL}" \
+      -H "Content-Type: application/json" \
+      -d "${query}" 2>&1) || true
+
+    local current_end
+    current_end=$(echo "${response}" | grep -o '"end":[0-9]*' | head -1 | cut -d: -f2)
+
+    if [ -n "${current_end}" ] && [ "${current_end}" -gt "${baseline_end}" ] 2>/dev/null; then
+      echo "INFO: otp-router reload confirmed — serviceTimeRange.end advanced from ${baseline_end} to ${current_end}"
+      return 0
+    fi
+
+    attempt=$(( attempt + 1 ))
+    elapsed=$(( attempt * poll_interval ))
+    echo "INFO: Still waiting for otp-router reload... (${elapsed}s elapsed, attempt ${attempt}/${max_attempts}, end=${current_end:-unknown})"
+
+    sleep "${poll_interval}"
+  done
+
+  echo "ERROR: otp-router reload poll timed out after ${poll_timeout}s — serviceTimeRange.end never advanced past baseline ${baseline_end}"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # When sourced by bats tests, stop here — do not execute the build pipeline.
 # ---------------------------------------------------------------------------
 if [ "${BATS_SOURCE_ONLY:-}" = "true" ]; then
@@ -225,8 +326,35 @@ echo "=== Graph build complete ==="
 echo "Graph uploaded to: gs://${GRAPH_BUCKET}/${GRAPH_OUTPUT_VERSION}/"
 echo "Latest pointer updated: gs://${GRAPH_BUCKET}/latest/"
 
+# Capture pre-redeploy serviceTimeRange.end so the poll loop has a baseline
+# to compare against (proves the new graph has replaced the old one).
+# The baseline must be captured BEFORE the redeploy to reflect the OLD graph.
+if [ -n "${OTP_ROUTER_SERVERINFO_URL:-}" ]; then
+  echo "=== Capturing pre-redeploy serviceTimeRange baseline ==="
+  _pre_redeploy_response=$(curl --silent --show-error --fail-with-body \
+    --connect-timeout 10 \
+    --max-time 60 \
+    --retry 3 --retry-connrefused --retry-delay 2 \
+    -X POST "${OTP_ROUTER_SERVERINFO_URL}" \
+    -H "Content-Type: application/json" \
+    -d '{"query":"{ serviceTimeRange { start end } }"}' 2>&1) || true
+  PRE_REDEPLOY_END_EPOCH=$(echo "${_pre_redeploy_response}" | grep -o '"end":[0-9]*' | head -1 | cut -d: -f2)
+  if [ -n "${PRE_REDEPLOY_END_EPOCH}" ]; then
+    export PRE_REDEPLOY_END_EPOCH
+    echo "INFO: Pre-redeploy serviceTimeRange.end = ${PRE_REDEPLOY_END_EPOCH}"
+  else
+    echo "WARN: Could not capture pre-redeploy baseline; poll-wait will query baseline on start"
+  fi
+fi
+
 # Trigger otp-router redeploy so it loads the new graph (AC-1 / AC-2)
 trigger_railway_redeploy
+
+# Wait for otp-router to finish reloading the new ~2.2 GB graph before verifying
+# freshness (BL-334: eliminates false CRASHED race where verify ran before reload
+# completed and saw the old graph). Poll until serviceTimeRange.end advances past
+# the pre-redeploy baseline.
+wait_for_otp_router_reload
 
 # Verify otp-router loaded the fresh graph (AC-5)
 verify_otp_router_graph_freshness
