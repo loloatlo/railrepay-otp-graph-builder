@@ -331,8 +331,24 @@ teardown() {
 }
 
 # AC-5: end epoch equals today exactly → pass (boundary case, not stale)
+#
+# SUPERSEDED default, PRESERVED as explicit-opt-out (BL-360/TD-OTP-C,
+# 2026-07-02): this test originally asserted end==today is FRESH under the
+# DEFAULT config. BL-360 hardens verify_otp_router_graph_freshness() to
+# require a forward-headroom buffer (GRAPH_FRESHNESS_HEADROOM_DAYS, default
+# >=2) — see tests/build-graph-bl360-freshness-headroom.bats AC-1/AC-5(a),
+# now the DISPOSITIVE RED assertion for end==today (STALE under the new
+# default). The 2026-07-02 graph-currency incident (live graph ended
+# 2026-06-30, today 2026-07-02 returned 0 itineraries) is direct evidence
+# that a graph ending exactly on "today" is one missed rebuild from
+# stranding — this test's original "boundary = pass" semantics no longer
+# hold as the DEFAULT.
+#
+# Retained here (not deleted) as a regression guard for explicit opt-out:
+# GRAPH_FRESHNESS_HEADROOM_DAYS=0 must still reach the original "same-day
+# graph is valid" verdict.
 
-@test "AC-5: verify_otp_router_graph_freshness exits 0 when serviceTimeRange end epoch equals today (boundary)" {
+@test "AC-5: verify_otp_router_graph_freshness exits 0 when serviceTimeRange end epoch equals today, GIVEN zero forward headroom explicitly (boundary — pre-BL-360 contract preserved as opt-out)" {
   # end epoch 1780747200 = 2026-06-06 12:00 UTC (noon-UTC — unambiguous on all host timezones).
   # Original epoch 1780700400 = 2026-06-05 23:00 UTC (midnight BST) was timezone-ambiguous:
   # rendered 2026-06-06 on a BST host but 2026-06-05 on a UTC Railway host → would FAIL in
@@ -340,6 +356,9 @@ teardown() {
   export OTP_ROUTER_SERVERINFO_URL="http://otp-router.internal:8080/otp/routers/default/index/graphql"
   export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1764547200,"end":1780747200}}}'
   export STUB_CURL_EXIT=0
+  # Explicit opt-out of forward headroom — proves the knob is genuinely
+  # configurable down to 0, matching this test's original expectation.
+  export GRAPH_FRESHNESS_HEADROOM_DAYS=0
 
   run verify_otp_router_graph_freshness
   [ "$status" -eq 0 ]

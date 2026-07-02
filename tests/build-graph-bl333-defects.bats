@@ -452,24 +452,34 @@ source_validate_graph() {
   [[ "$output" == *"stale"* ]] || [[ "$output" == *"STALE"* ]] || [[ "$output" == *"ERROR"* ]]
 }
 
-@test "AC-4: check_graph_freshness exits 0 when serviceTimeRange end epoch equals today exactly (boundary — must not be false-positive stale)" {
-  # AC-4 boundary: end_date == today → fresh (same-day graph is valid).
-  # end=1718366400 = 2026-06-14 12:00 UTC, today=2026-06-14 → end_date >= today → exit 0
-  # CURRENTLY FAILS: function does not exist.
+@test "AC-4: check_graph_freshness exits 0 when serviceTimeRange end epoch equals today exactly, GIVEN zero forward headroom explicitly (boundary — must not be false-positive stale under the pre-BL-360 contract)" {
+  # AC-4 boundary (SUPERSEDED default, PRESERVED as an explicit-opt-out case by
+  # BL-360/TD-OTP-C, 2026-07-02): this test originally asserted end==today is
+  # FRESH under the DEFAULT config. BL-360 hardens the freshness gate to require
+  # a forward-headroom buffer (GRAPH_FRESHNESS_HEADROOM_DAYS, default >=2) —
+  # see tests/build-graph-bl360-freshness-headroom.bats AC-1/AC-5(a), which is
+  # now the DISPOSITIVE RED assertion for end==today (STALE under the new
+  # default). That test intentionally supersedes this one's default-config
+  # expectation; the 2026-07-02 graph-currency incident is direct evidence a
+  # graph ending exactly on "today" is one missed rebuild from stranding.
+  #
+  # This test is retained (not deleted) as a REGRESSION GUARD for the case
+  # where an operator explicitly opts OUT of forward headroom
+  # (GRAPH_FRESHNESS_HEADROOM_DAYS=0) — the original "same-day graph is valid"
+  # semantics must still be reachable when headroom is explicitly disabled.
   source_validate_graph
 
   export OTP_VALIDATION_URL="http://localhost:${VALIDATION_PORT:-8080}/otp/routers/default/index/graphql"
-  # 2026-06-14 12:00:00 UTC = 1718366400? Let me compute correctly:
-  # Base: 2026-06-14 = days since epoch
-  # 2026-01-01 = 1767225600 (from known: 2026-05-17 12:00 = 1747483200 used above is wrong — that's 2025)
-  # Re-derive: 1747483200 / 86400 = 20230.59... days → 1970 + 55.4 years → 2025-05-17 ✓
-  # 2026-06-14 12:00 UTC:
-  #   2026 = 2025 + 1 year = 1747483200 (2025-05-17) base is off
-  #   Use direct: 2026-01-01 00:00 UTC = 1767225600
-  #   2026-06-14 = 2026-01-01 + 164 days = 1767225600 + (164 * 86400) = 1767225600 + 14169600 = 1781395200
+  # 2026-06-14 12:00 UTC = 1781438400 (see derivation retained below for provenance)
+  #   2026-01-01 00:00 UTC = 1767225600
+  #   2026-06-14 = 2026-01-01 + 164 days = 1767225600 + (164 * 86400) = 1781395200
   #   2026-06-14 12:00 UTC = 1781395200 + 43200 = 1781438400
   export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1781438400}}}'
   export STUB_CURL_EXIT=0
+  export TODAY_DATE=2026-06-14
+  # Explicit opt-out of forward headroom — proves the knob is genuinely
+  # configurable down to 0, not just up from a nonzero default.
+  export GRAPH_FRESHNESS_HEADROOM_DAYS=0
 
   run check_graph_freshness
   [ "$status" -eq 0 ]
