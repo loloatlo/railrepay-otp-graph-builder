@@ -78,6 +78,12 @@ trigger_railway_redeploy() {
 # Optional env vars:
 #   TODAY_DATE — Override for "today" (YYYY-MM-DD).  Used by tests for
 #                deterministic date comparison.  Defaults to $(date +%Y-%m-%d).
+#   GRAPH_FRESHNESS_HEADROOM_DAYS — Forward buffer in days (default 2).
+#                A graph must end at least this many days AFTER today to be
+#                considered FRESH — end >= today + N. This is a FORWARD
+#                (lookahead) guard, distinct from validate-graph.sh's
+#                GRAPH_FRESHNESS_DAYS (a BACKWARD tolerance). Set to 0 to
+#                restore the legacy end>=today behaviour. (BL-360/TD-OTP-C)
 # ---------------------------------------------------------------------------
 verify_otp_router_graph_freshness() {
   if [ -z "${OTP_ROUTER_SERVERINFO_URL:-}" ]; then
@@ -86,6 +92,15 @@ verify_otp_router_graph_freshness() {
   fi
 
   local today="${TODAY_DATE:-$(date +%Y-%m-%d)}"
+  local headroom_days="${GRAPH_FRESHNESS_HEADROOM_DAYS:-2}"
+
+  # Compute required date: today + GRAPH_FRESHNESS_HEADROOM_DAYS
+  local required_date
+  if [ "${headroom_days}" -eq 0 ]; then
+    required_date="${today}"
+  else
+    required_date=$(date -u -d "${today} + ${headroom_days} days" +%Y-%m-%d)
+  fi
 
   local query='{"query":"{ serviceTimeRange { start end } }"}'
 
@@ -123,12 +138,12 @@ verify_otp_router_graph_freshness() {
   end_date=$(date -u -d "@${end_epoch}" +%Y-%m-%d)
 
   # Compare dates lexicographically (YYYY-MM-DD format sorts correctly as strings)
-  if [[ "${end_date}" < "${today}" ]]; then
-    echo "ERROR: otp-router graph is STALE — serviceTimeRange end=${end_date} is before today=${today}"
+  if [[ "${end_date}" < "${required_date}" ]]; then
+    echo "ERROR: otp-router graph is STALE — serviceTimeRange end=${end_date} is before required=${required_date} (today=${today}, GRAPH_FRESHNESS_HEADROOM_DAYS=${headroom_days})"
     return 1
   fi
 
-  echo "INFO: otp-router serviceTimeRange OK — end=${end_date} covers today=${today}"
+  echo "INFO: otp-router serviceTimeRange FRESH — end=${end_date} covers required=${required_date} (today=${today}, GRAPH_FRESHNESS_HEADROOM_DAYS=${headroom_days})"
   return 0
 }
 

@@ -20,19 +20,40 @@
 #                          considered fresh.
 #                          end_date >= (today - GRAPH_FRESHNESS_DAYS) → exit 0
 #                          end_date <  (today - GRAPH_FRESHNESS_DAYS) → exit 1
+#   GRAPH_FRESHNESS_HEADROOM_DAYS — Forward buffer in days (default 2).
+#                          Independent of GRAPH_FRESHNESS_DAYS above (that is
+#                          a BACKWARD tolerance; this is a FORWARD lookahead
+#                          guard). A graph must end at least this many days
+#                          AFTER today to be considered FRESH:
+#                          end_date >= (today + GRAPH_FRESHNESS_HEADROOM_DAYS) → exit 0
+#                          end_date <  (today + GRAPH_FRESHNESS_HEADROOM_DAYS) → exit 1
+#                          Set to 0 to opt OUT of the forward-headroom check
+#                          entirely, restoring the legacy behaviour where only
+#                          GRAPH_FRESHNESS_DAYS (backward tolerance) is
+#                          enforced. (BL-360/TD-OTP-C)
 # ---------------------------------------------------------------------------
 check_graph_freshness() {
   local validation_url="${OTP_VALIDATION_URL:-http://localhost:${VALIDATION_PORT:-8080}/otp/routers/default/index/graphql}"
 
   local today="${TODAY_DATE:-$(date +%Y-%m-%d)}"
   local freshness_days="${GRAPH_FRESHNESS_DAYS:-0}"
+  local headroom_days="${GRAPH_FRESHNESS_HEADROOM_DAYS:-2}"
 
-  # Compute threshold date: today - GRAPH_FRESHNESS_DAYS
+  # Compute threshold date: today - GRAPH_FRESHNESS_DAYS (backward tolerance)
   local threshold_date
   if [ "${freshness_days}" -eq 0 ]; then
     threshold_date="${today}"
   else
     threshold_date=$(date -u -d "${today} - ${freshness_days} days" +%Y-%m-%d)
+  fi
+
+  # Compute required date: today + GRAPH_FRESHNESS_HEADROOM_DAYS (forward headroom).
+  # HEADROOM_DAYS=0 is an explicit opt-out — skip the forward check entirely
+  # (do NOT fold it into "required_date=today"; that would silently reintroduce
+  # a forward gate even when the caller asked to disable it).
+  local required_date=""
+  if [ "${headroom_days}" -ne 0 ]; then
+    required_date=$(date -u -d "${today} + ${headroom_days} days" +%Y-%m-%d)
   fi
 
   local query='{"query":"{ serviceTimeRange { start end } }"}'
@@ -66,12 +87,20 @@ check_graph_freshness() {
   end_date=$(date -u -d "@${end_epoch}" +%Y-%m-%d)
 
   # Compare lexicographically (YYYY-MM-DD sorts correctly as strings)
+  # Backward tolerance check (existing GRAPH_FRESHNESS_DAYS behaviour)
   if [[ "${end_date}" < "${threshold_date}" ]]; then
     echo "ERROR: Graph is STALE — serviceTimeRange end=${end_date} is before threshold=${threshold_date} (today=${today}, GRAPH_FRESHNESS_DAYS=${freshness_days})"
     return 1
   fi
 
-  echo "INFO: Graph freshness OK — serviceTimeRange end=${end_date} covers threshold=${threshold_date} (today=${today})"
+  # Forward headroom check (new, independent knob — BL-360/TD-OTP-C).
+  # Skipped entirely when headroom_days=0 (explicit opt-out; required_date is empty).
+  if [ -n "${required_date}" ] && [[ "${end_date}" < "${required_date}" ]]; then
+    echo "ERROR: Graph is STALE — serviceTimeRange end=${end_date} is before required=${required_date} (today=${today}, GRAPH_FRESHNESS_HEADROOM_DAYS=${headroom_days})"
+    return 1
+  fi
+
+  echo "INFO: Graph freshness OK — serviceTimeRange end=${end_date} covers threshold=${threshold_date} (today=${today}, GRAPH_FRESHNESS_DAYS=${freshness_days}, GRAPH_FRESHNESS_HEADROOM_DAYS=${headroom_days}, required=${required_date:-N/A})"
   return 0
 }
 
