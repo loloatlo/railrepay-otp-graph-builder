@@ -56,10 +56,10 @@
 #
 # Epoch reference (all at 12:00:00 UTC to be timezone-unambiguous on any host):
 #   TODAY_DATE fixed at 2026-07-02 (matches the incident date).
-#   2026-07-02 12:00 UTC = 1783771200
-#   +1 day  (2026-07-03 12:00 UTC) = 1783857600
-#   +2 days (2026-07-04 12:00 UTC) = 1783944000  <- default headroom N=2 boundary
-#   +3 days (2026-07-05 12:00 UTC) = 1784030400
+#   2026-07-02 12:00 UTC = 1782993600
+#   +1 day  (2026-07-03 12:00 UTC) = 1783080000
+#   +2 days (2026-07-04 12:00 UTC) = 1783166400  <- default headroom N=2 boundary
+#   +3 days (2026-07-05 12:00 UTC) = 1783252800
 
 # ---------------------------------------------------------------------------
 # setup / teardown — build-graph.sh scenarios
@@ -129,7 +129,7 @@ teardown() {
   TODAY_DATE=2026-07-02
   export TODAY_DATE
   # end = 2026-07-02 12:00 UTC (== today, zero forward headroom)
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783771200}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1782993600}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -147,7 +147,7 @@ teardown() {
   export STUB_TODAY=2026-07-02
   TODAY_DATE=2026-07-02
   export TODAY_DATE
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783944000}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783166400}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -165,7 +165,7 @@ teardown() {
   export STUB_TODAY=2026-07-02
   TODAY_DATE=2026-07-02
   export TODAY_DATE
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783857600}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783080000}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -185,7 +185,7 @@ teardown() {
   TODAY_DATE=2026-07-02
   export TODAY_DATE
   export GRAPH_FRESHNESS_HEADROOM_DAYS=3
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783944000}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783166400}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -206,7 +206,7 @@ teardown() {
   TODAY_DATE=2026-07-02
   export TODAY_DATE
   export GRAPH_FRESHNESS_HEADROOM_DAYS=3
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1784030400}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783252800}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -228,7 +228,7 @@ teardown() {
   export TODAY_DATE
   export GRAPH_FRESHNESS_HEADROOM_DAYS=2
   # end == today -> STALE under the new gate
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783771200}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1782993600}}}'
   export STUB_CURL_EXIT=0
 
   run verify_otp_router_graph_freshness
@@ -252,7 +252,7 @@ teardown() {
   export STUB_TODAY=2026-07-02
   TODAY_DATE=2026-07-02
   export TODAY_DATE
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783771200}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1782993600}}}'
   export STUB_CURL_EXIT=0
 
   run check_graph_freshness
@@ -266,7 +266,7 @@ teardown() {
   export STUB_TODAY=2026-07-02
   TODAY_DATE=2026-07-02
   export TODAY_DATE
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783944000}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783166400}}}'
   export STUB_CURL_EXIT=0
 
   run check_graph_freshness
@@ -282,7 +282,7 @@ teardown() {
   export STUB_TODAY=2026-07-02
   TODAY_DATE=2026-07-02
   export TODAY_DATE
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783857600}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783080000}}}'
   export STUB_CURL_EXIT=0
 
   run check_graph_freshness
@@ -306,7 +306,7 @@ teardown() {
   export TODAY_DATE
   export GRAPH_FRESHNESS_DAYS=5
   export GRAPH_FRESHNESS_HEADROOM_DAYS=3
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783944000}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783166400}}}'
   export STUB_CURL_EXIT=0
 
   run check_graph_freshness
@@ -341,7 +341,7 @@ teardown() {
   TODAY_DATE=2026-07-02
   export TODAY_DATE
   export GRAPH_FRESHNESS_HEADROOM_DAYS=2
-  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1783771200}}}'
+  export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1782993600}}}'
   export STUB_CURL_EXIT=0
 
   run check_graph_freshness

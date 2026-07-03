@@ -491,10 +491,21 @@ source_validate_graph() {
   # today=2026-06-14, GRAPH_FRESHNESS_DAYS=3, end=2026-06-12 → within tolerance → exit 0
   # end epoch for 2026-06-12 12:00 UTC = 1781438400 - (2 * 86400) = 1781265600
   # CURRENTLY FAILS: function does not exist.
+  #
+  # RECONCILED (BL-360/TD-OTP-C, 2026-07-02): this test isolates the BACKWARD-
+  # tolerance knob (GRAPH_FRESHNESS_DAYS) it intends to test. BL-360 hardens the
+  # default gate to ALSO require forward headroom (GRAPH_FRESHNESS_HEADROOM_DAYS,
+  # default 2), which would otherwise make this end-in-the-past graph STALE
+  # regardless of GRAPH_FRESHNESS_DAYS. Explicitly opting out of forward headroom
+  # (mirroring the sibling boundary test above) decouples this assertion from the
+  # new forward gate so it continues to verify backward tolerance in isolation —
+  # the GRAPH_FRESHNESS_DAYS knob still exists and must still work when an
+  # operator explicitly disables forward headroom.
   source_validate_graph
 
   export OTP_VALIDATION_URL="http://localhost:${VALIDATION_PORT:-8080}/otp/routers/default/index/graphql"
   export GRAPH_FRESHNESS_DAYS=3
+  export GRAPH_FRESHNESS_HEADROOM_DAYS=0
   export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1781265600}}}'
   export STUB_CURL_EXIT=0
 
@@ -505,10 +516,20 @@ source_validate_graph() {
 @test "AC-4: check_graph_freshness exits non-zero when graph exceeds GRAPH_FRESHNESS_DAYS tolerance window" {
   # AC-4 tolerance exceeded: GRAPH_FRESHNESS_DAYS=1, end=2026-06-12 (2 days ago) → stale
   # CURRENTLY FAILS: function does not exist.
+  #
+  # RECONCILED (BL-360/TD-OTP-C, 2026-07-02): this test's assertion (non-zero/
+  # stale) already holds under BOTH the old backward-only gate and the new
+  # forward-headroom-by-default gate, so it did not go RED like its sibling
+  # above. However, without opting out of forward headroom, a passing result
+  # here is ambiguous — it could be "stale because GRAPH_FRESHNESS_DAYS
+  # exceeded" (the knob under test) OR "stale because forward headroom missing"
+  # (an unrelated gate). Explicitly disabling forward headroom isolates the
+  # assertion back to proving the GRAPH_FRESHNESS_DAYS knob specifically.
   source_validate_graph
 
   export OTP_VALIDATION_URL="http://localhost:${VALIDATION_PORT:-8080}/otp/routers/default/index/graphql"
   export GRAPH_FRESHNESS_DAYS=1
+  export GRAPH_FRESHNESS_HEADROOM_DAYS=0
   export STUB_CURL_RESPONSE='{"data":{"serviceTimeRange":{"start":1776000000,"end":1781265600}}}'
   export STUB_CURL_EXIT=0
 
