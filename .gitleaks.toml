@@ -1,0 +1,30 @@
+# =============================================================================
+# RailRepay — shared gitleaks config (SOPs Rule 25, added v3.1 2026-07-09)
+# =============================================================================
+# Copy this file to each railrepay repo root alongside the secret-scan.yml
+# workflow (see BL item "gitleaks secret-scan CI rollout"). Pilot on ONE repo
+# first and tune the allowlist there before rolling out to the rest.
+#
+# Extends gitleaks' default ruleset (Twilio, Stripe, GCP, generic API keys,
+# private-key blocks, connection strings are all covered by the defaults).
+# Allowlist below covers RailRepay's known-safe patterns ONLY. Do NOT
+# allowlist a real credential to make CI green — rotate it (Rule 25 §4).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "RailRepay known-safe paths and placeholder patterns"
+paths = [
+  '''node_modules''',
+  '''\.env\.example$''',
+  '''tests?/fixtures/''',
+  '''coverage/''',
+  '''dist/''',
+]
+regexes = [
+  # Documented placeholder patterns used in READMEs / specs
+  '''(?i)(your|placeholder|example|dummy)[-_]?(api[-_]?key|token|secret|password)''',
+  # Railway variable *references* are not secrets
+  '''\$\{\{[A-Za-z]+\.[A-Z_]+\}\}''',
+]
