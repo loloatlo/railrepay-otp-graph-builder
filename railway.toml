@@ -5,7 +5,9 @@ dockerfilePath = "Dockerfile.builder"
 [deploy]
 startCommand = "/opt/build-graph.sh"
 restartPolicyType = "NEVER"
-cronSchedule = "0 4 * * 1,4"
+# cronSchedule DISABLED 2026-08-29 for the cost wind-down.
+# TO REACTIVATE: uncomment the line below and redeploy.
+# cronSchedule = "0 4 * * 1,4"
 numReplicas = 1
 
 # Graph builder runs twice weekly (Monday + Thursday 4:00 AM UTC)
